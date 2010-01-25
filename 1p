@@ -1,0 +1,81 @@
+#!/usr/bin/env perl -w
+
+# Command line tool for 1Password
+# 
+# Reads the Agile Keychain and outputs URLs which will go-and-auto-fill.
+# 
+# Usage:
+#   1p mint
+#
+# Set the environment variable "ONEPASSWDKEYCHAIN" to the path to the Agile Keychain directory.
+
+use strict;
+use warnings;
+eval { use JSON; };
+if ($@) {
+  print STDERR "This script requires the JSON perl module from CPAN.\n";
+  print STDERR "If you use macports, install with: sudo port install p5-json\n";
+  print STDERR "If you are using the default Mac OS X perl, install it with: sudo cpan install JSON\n";
+  print STDERR "Otherwise, see the documentation for whatever packaging system you use.\n";
+  exit 1;
+}
+
+my $keychain_dir=$ENV{ONEPASSWDKEYCHAIN} || undef;
+my $regexp='.';
+
+if (defined($keychain_dir)) {
+  $keychain_dir =~ s/^~/$ENV{HOME}/;
+}
+else {
+  for my $dir ( 
+                     $ENV{ONEPASSWDKEYCHAIN} || undef,
+                     "~/Dropbox/1Password.agilekeychain",
+                     "~/Dropbox/Private/1Password.agilekeychain",
+                     "~/Library/Application Support/1Password/1Password.agilekeychain",
+              ) {
+    next unless (defined($dir));
+    my $possible_dir=$dir;
+    $possible_dir =~ s/^~/$ENV{HOME}/;
+    next unless (-d $possible_dir);
+    $keychain_dir=$possible_dir;
+    warn "$0: found keychain at ${keychain_dir}; set ONEPASSWDKEYCHAIN=${keychain_dir} to silence this message.\n";
+    last;
+  }
+}
+
+die "Cannot find agile keychain\n" unless ($keychain_dir and -d $keychain_dir);
+
+$keychain_dir="${keychain_dir}/data/default";
+
+if (@ARGV) {
+  $regexp="(?:" . join("|", map { qr/\Q$_\E/ } (@ARGV)) . ")";
+}
+
+if (opendir(DIR, $keychain_dir)) {
+  my @files=map { "${keychain_dir}/$_" } (grep { /\.1password$/ } (readdir(DIR)));
+  closedir(DIR);
+  for my $file (@files) {
+    if (open(JSON, "<", $file)) {
+      my $data=from_json(<JSON>);
+      if ($data->{uuid} and $data->{location}) {
+        my $location=$data->{location};
+        my $uuid=$data->{uuid};
+        next unless ($location =~ /${regexp}/o);
+        if ($location =~ /\?/) {
+          $location = "${location}&onepasswdfill=${uuid}";
+        }
+        else {
+          $location = "${location}?onepasswdfill=${uuid}";
+        }
+        print "${location}\n";
+      }
+    }
+    else {
+      warn "$0: ${file}: could not open for reading: $!\n";
+    }
+  }
+}
+else {
+  warn "$0: ${keychain_dir}: could not open for reading: $!\n";
+}
+
